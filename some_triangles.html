@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>some triangles</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+  <link type="text/css" rel="stylesheet" href="./css/main.css">
+  <style>
+    body {
+      background-color: #fff;
+      color: #444;
+    }
+    a {
+      color:#08f;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="info">
+    <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - some GPUPU triangles<br/>
+  </div>
+
+  <!--
+  TODO: If you're reading this, you may wish to improve this example by
+  - Create a better shading for the birds?
+
+-->
+
+<!-- shader for bird's position -->
+<script id="fragmentShaderPosition" type="x-shader/x-fragment">
+
+  uniform float time;
+  uniform float delta;
+
+  void main()	{
+
+    vec2 uv = gl_FragCoord.xy / resolution.xy;
+    vec4 tmpPos = texture2D( texturePosition, uv );
+    vec3 position = tmpPos.xyz;
+    vec3 velocity = texture2D( textureVelocity, uv ).xyz;
+
+    // gl_FragColor = vec4( position + velocity * delta * 15., 1. );
+    gl_FragColor = vec4( position + velocity , 1. );
+    // gl_FragColor = vec4( position , 1. );
+
+  }
+
+</script>
+
+<!-- shader for bird's velocity -->
+<script id="fragmentShaderVelocity" type="x-shader/x-fragment">
+
+  uniform float time;
+  uniform float testing;
+  uniform float delta; // about 0.016
+  uniform float separationDistance; // 20
+  uniform float alignmentDistance; // 40
+  uniform float cohesionDistance; //
+  uniform float freedomFactor;
+  uniform vec3 predator;
+
+  const float width = resolution.x;
+  const float height = resolution.y;
+
+  const float PI = 3.141592653589793;
+  const float PI_2 = PI * 2.0;
+  // const float VISION = PI * 0.55;
+
+  float zoneRadius = 40.0;
+  float zoneRadiusSquared = 1600.0;
+
+  float separationThresh = 0.45;
+  float alignmentThresh = 0.65;
+
+  const float UPPER_BOUNDS = BOUNDS;
+  const float LOWER_BOUNDS = -UPPER_BOUNDS;
+  vec3 selfVelocity;
+
+  void main() {
+
+
+    vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+    vec3 selfPosition = texture2D( texturePosition, uv ).xyz;
+    // vec3 selfVelocity = texture2D( textureVelocity, uv ).xyz;
+    selfVelocity = texture2D( textureVelocity, uv ).xyz;
+
+    if(selfPosition.x > UPPER_BOUNDS * 10.){
+      selfVelocity = vec3(-1.,0.5,0.);
+    }else if(selfPosition.x < LOWER_BOUNDS * 10. ){
+      selfVelocity = vec3(1.,-0.5,0.);
+    }
+
+    gl_FragColor = vec4( selfVelocity, 1.0 );
+
+  }
+
+</script>
+
+<script type="x-shader/x-vertex" id="birdVS">
+
+  attribute vec2 reference;
+  attribute float birdVertex;
+
+  attribute vec3 birdColor;
+
+  uniform sampler2D texturePosition;
+  uniform sampler2D textureVelocity;
+
+  varying vec4 vColor;
+  varying float z;
+
+  uniform float time;
+
+  void main() {
+
+    vec4 tmpPos = texture2D( texturePosition, reference );
+    vec3 pos = tmpPos.xyz;
+    vec3 velocity = normalize(texture2D( textureVelocity, reference ).xyz);
+
+    vec3 newPosition = position;
+
+    newPosition = mat3( modelMatrix ) * newPosition;
+
+
+    velocity.z *= -1.;
+    float xz = length( velocity.xz );
+    float xyz = 0.5;
+    float x = sqrt( 1. - velocity.y * velocity.y );
+
+    float cosry = velocity.x / xz;
+    float sinry = velocity.z / xz;
+
+    float cosrz = x / xyz;
+    float sinrz = velocity.y / xyz;
+
+    mat3 maty =  mat3(
+    cosry, 0, -sinry,
+    0    , 1, 0     ,
+    sinry, 0, cosry
+
+    );
+
+    mat3 matz =  mat3(
+    cosrz , sinrz, 0,
+    -sinrz, cosrz, 0,
+    0     , 0    , 1
+    );
+
+    newPosition =  maty * matz * newPosition;
+    newPosition += pos;
+
+    z = newPosition.z;
+
+    vColor = vec4( birdColor, 1.0 );
+    gl_Position = projectionMatrix *  viewMatrix  * vec4( newPosition, 1.0 );
+  }
+
+</script>
+
+<!-- bird geometry shader -->
+<script type="x-shader/x-fragment" id="birdFS">
+
+  varying vec4 vColor;
+  varying float z;
+
+  uniform vec3 color;
+
+  void main() {
+    // Fake colors for now
+    // float z2 = vColor.x;
+    if(vColor.x > 0.5)
+    gl_FragColor = vec4( 1. - vColor.x, vColor.y, vColor.z, 1. );
+    else if(vColor.y > 0.5)
+    gl_FragColor = vec4( vColor.x, 1. - vColor.y, vColor.z, 1. );
+    else if(vColor.z > 0.5)
+    gl_FragColor = vec4( vColor.x, vColor.y, 1. - vColor.z, 1. );
+
+  }
+
+</script>
+
+<script type="module">
+
+  import * as THREE from './js/three.module.js';
+
+  import Stats from './js/stats.module.js';
+  import { GUI } from './js/dat.gui.module.js';
+
+  import { GPUComputationRenderer } from './js/GPUComputationRenderer.js';
+  import { OrbitControls } from './js/OrbitControls.js';
+
+  /* TEXTURE WIDTH FOR SIMULATION */
+  const WIDTH = 2;
+
+  const BIRDS = WIDTH * WIDTH;
+
+  let PAUSE = true;
+
+  // Custom Geometry - using 3 triangles each. No UVs, no normals currently.
+  function BirdGeometry() {
+
+    const triangles = BIRDS;
+    const points = triangles * 3;
+
+    THREE.BufferGeometry.call( this );
+
+    const vertices = new THREE.BufferAttribute( new Float32Array( points * 3 ), 3 );
+    const birdColors = new THREE.BufferAttribute( new Float32Array( points * 3 ), 3 );
+    const references = new THREE.BufferAttribute( new Float32Array( points * 2 ), 2 );
+    const birdVertex = new THREE.BufferAttribute( new Float32Array( points ), 1 );
+
+    this.setAttribute( 'position', vertices );
+    this.setAttribute( 'birdColor', birdColors );
+    this.setAttribute( 'reference', references );
+    this.setAttribute( 'birdVertex', birdVertex );
+
+
+    let v = 0;
+
+    function verts_push() {
+
+      for ( let i = 0; i < arguments.length; i ++ ) {
+
+        vertices.array[ v ++ ] = arguments[ i ];
+
+      }
+
+    }
+
+    for ( let f = 0; f < BIRDS; f ++ ) {
+
+      verts_push(
+      0, - 0, - 10, //
+      0, 10, - 0, //
+      0, -0, 10 //
+      );
+
+    }
+
+    for ( let v = 0; v < triangles * 3; v ++ ) {
+
+      const i = ~ ~ ( v / 3 );
+      const x = ( i % WIDTH ) / WIDTH;
+      const y = ~ ~ ( i / WIDTH ) / WIDTH;
+
+      const c = new THREE.Color( Math.random() , Math.random(), Math.random());
+      // console.log(c)
+
+      birdColors.array[ v * 3 + 0 ] = c.r;
+      birdColors.array[ v * 3 + 1 ] = c.g;
+      birdColors.array[ v * 3 + 2 ] = c.b;
+
+      references.array[ v * 2 ] = x;
+      references.array[ v * 2 + 1 ] = y;
+
+      birdVertex.array[ v ] = v % 9;
+
+    }
+
+    console.log(birdColors.array)
+    console.log(references.array)
+    console.log(birdVertex.array)
+
+
+    // this.scale( 0.2, 0.2, 0.2 );
+
+  }
+
+  BirdGeometry.prototype = Object.create( THREE.BufferGeometry.prototype );
+
+
+  let container, stats;
+  let camera, scene, renderer;
+  let mouseX = 0, mouseY = 0;
+
+  let analyser;
+  let data;
+
+  let windowHalfX = window.innerWidth / 2;
+  let windowHalfY = window.innerHeight / 2;
+
+  const BOUNDS = 15, BOUNDS_HALF = BOUNDS / 2;
+
+  let last = performance.now();
+
+  let gpuCompute;
+  let velocityVariable;
+  let positionVariable;
+  let positionUniforms;
+  let velocityUniforms;
+  let birdUniforms;
+
+  init();
+  animate();
+
+  function init() {
+
+    container = document.createElement( 'div' );
+    document.body.appendChild( container );
+
+    camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 1, 3000 );
+    camera.position.z = 350;
+
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color( 0xffffff );
+    // scene.fog = new THREE.Fog( 0xffffff, 100, 1000 );
+
+    renderer = new THREE.WebGLRenderer();
+    renderer.setPixelRatio( window.devicePixelRatio );
+    renderer.setSize( window.innerWidth, window.innerHeight );
+    container.appendChild( renderer.domElement );
+
+    initComputeRenderer();
+
+    stats = new Stats();
+    container.appendChild( stats.dom );
+
+
+    //
+    new OrbitControls( camera, renderer.domElement );
+
+    window.addEventListener( 'resize', onWindowResize, false );
+    window.addEventListener( 'keydown', onKeyDown, false );
+    window.addEventListener( 'keyup', onKeyUp, false );
+
+    const gui = new GUI();
+
+
+    const effectController = {
+      separation: 20.0,
+      alignment: 20.0,
+      cohesion: 20.0,
+      freedom: 0.75
+    };
+
+    const valuesChanger = function () {
+
+      velocityUniforms[ "separationDistance" ].value = effectController.separation;
+      velocityUniforms[ "alignmentDistance" ].value = effectController.alignment;
+      velocityUniforms[ "cohesionDistance" ].value = effectController.cohesion;
+      velocityUniforms[ "freedomFactor" ].value = effectController.freedom;
+
+    };
+
+    valuesChanger();
+
+    gui.add( effectController, "separation", 0.0, 100.0, 1.0 ).onChange( valuesChanger );
+    gui.add( effectController, "alignment", 0.0, 100, 0.001 ).onChange( valuesChanger );
+    gui.add( effectController, "cohesion", 0.0, 100, 0.025 ).onChange( valuesChanger );
+    gui.close();
+
+    initBirds();
+    // initAudio()
+  }
+
+  function initComputeRenderer() {
+
+    gpuCompute = new GPUComputationRenderer( WIDTH, WIDTH, renderer );
+
+    if ( isSafari() ) {
+
+      gpuCompute.setDataType( THREE.HalfFloatType );
+
+    }
+
+    const dtPosition = gpuCompute.createTexture();
+    const dtVelocity = gpuCompute.createTexture();
+    fillPositionTexture( dtPosition );
+    fillVelocityTexture( dtVelocity );
+
+
+    console.log(dtPosition);
+    console.log(dtVelocity);
+
+    velocityVariable = gpuCompute.addVariable( "textureVelocity", document.getElementById( 'fragmentShaderVelocity' ).textContent, dtVelocity );
+    positionVariable = gpuCompute.addVariable( "texturePosition", document.getElementById( 'fragmentShaderPosition' ).textContent, dtPosition );
+
+    gpuCompute.setVariableDependencies( velocityVariable, [ positionVariable, velocityVariable ] );
+    gpuCompute.setVariableDependencies( positionVariable, [ positionVariable, velocityVariable ] );
+
+    positionUniforms = positionVariable.material.uniforms;
+    velocityUniforms = velocityVariable.material.uniforms;
+
+    positionUniforms[ "time" ] = { value: 0.0 };
+    positionUniforms[ "delta" ] = { value: 0.0 };
+    velocityUniforms[ "time" ] = { value: 1.0 };
+    velocityUniforms[ "delta" ] = { value: 0.0 };
+    velocityUniforms[ "testing" ] = { value: 1.0 };
+    velocityUniforms[ "separationDistance" ] = { value: 1.0 };
+    velocityUniforms[ "alignmentDistance" ] = { value: 1.0 };
+    velocityUniforms[ "cohesionDistance" ] = { value: 1.0 };
+    velocityUniforms[ "freedomFactor" ] = { value: 1.0 };
+    velocityUniforms[ "predator" ] = { value: new THREE.Vector3() };
+    velocityVariable.material.defines.BOUNDS = BOUNDS.toFixed( 2 );
+
+    // velocityVariable.wrapS = THREE.RepeatWrapping;
+    // velocityVariable.wrapT = THREE.RepeatWrapping;
+    // positionVariable.wrapS = THREE.RepeatWrapping;
+    // positionVariable.wrapT = THREE.RepeatWrapping;
+
+    const error = gpuCompute.init();
+
+    if ( error !== null ) {
+
+      console.error( error );
+
+    }
+
+  }
+
+  function isSafari() {
+
+    return !! navigator.userAgent.match( /Safari/i ) && ! navigator.userAgent.match( /Chrome/i );
+
+  }
+
+  function initBirds() {
+
+    const geometry = new BirdGeometry();
+
+    // For Vertex and Fragment
+    birdUniforms = {
+      "color": { value: new THREE.Color( 0xff2200 ) },
+      "texturePosition": { value: null },
+      "textureVelocity": { value: null },
+      "time": { value: 1.0 },
+      "delta": { value: 0.0 }
+    };
+
+    // THREE.ShaderMaterial
+    const material = new THREE.ShaderMaterial( {
+      uniforms: birdUniforms,
+      vertexShader: document.getElementById( 'birdVS' ).textContent,
+      fragmentShader: document.getElementById( 'birdFS' ).textContent,
+      side: THREE.DoubleSide,
+      // wireframe: true
+    } );
+
+    const birdMesh = new THREE.Mesh( geometry, material );
+    birdMesh.rotation.y = Math.PI / 2;
+    birdMesh.matrixAutoUpdate = false;
+    birdMesh.updateMatrix();
+
+    scene.add( birdMesh );
+
+    const box = new THREE.BoxHelper( birdMesh, 0x000000 );
+    scene.add( box );
+
+
+
+
+
+  }
+
+  function initAudio(){
+    const listener = new THREE.AudioListener();
+    camera.add( listener );
+
+    // create an Audio source
+    const sound = new THREE.Audio( listener );
+
+    // load a sound and set it as the Audio object's buffer
+    const audioLoader = new THREE.AudioLoader();
+    audioLoader.load( 'beastie.mp3', function( buffer ) {
+      sound.setBuffer( buffer );
+      sound.setLoop(true);
+      sound.setVolume(0.5);
+      sound.play();
+    });
+
+    // create an AudioAnalyser, passing in the sound and desired fftSize
+    analyser = new THREE.AudioAnalyser( sound, 32 );
+
+    // get the average frequency of the sound
+    data = analyser.getFrequencyData();
+    console.log(data)
+  }
+
+  function fillPositionTexture( texture ) {
+
+    const theArray = texture.image.data;
+    for ( let k = 0, kl = theArray.length; k < kl; k += 4 ) {
+
+      // console.log(x)
+      const x = (kl * BOUNDS_HALF) - BOUNDS * (k+2)
+      console.log('k: '+k+' x: '+x)
+      const y = k * BOUNDS - BOUNDS_HALF;
+      const z = k * BOUNDS - BOUNDS_HALF;
+
+
+      theArray[ k + 0 ] = x;
+      theArray[ k + 1 ] = 0;
+      theArray[ k + 2 ] = 0;
+      theArray[ k + 3 ] = 1;
+    }
+
+  }
+
+  function fillVelocityTexture( texture ) {
+
+    const theArray = texture.image.data;
+
+    for ( let k = 0, kl = theArray.length; k < kl; k += 4 ) {
+
+      const x = Math.random() - 0.5;
+      const y = Math.random() - 0.5;
+      const z = Math.random() - 0.5;
+
+      // theArray[ k + 0 ] = x * 10;
+      // theArray[ k + 1 ] = y * 10;
+      // theArray[ k + 2 ] = z * 10;
+      theArray[ k + 0 ] = 1;
+      theArray[ k + 1 ] = 0;
+      theArray[ k + 2 ] = 0;
+      theArray[ k + 3 ] = 1;
+
+    }
+
+  }
+
+  function onWindowResize() {
+
+    windowHalfX = window.innerWidth / 2;
+    windowHalfY = window.innerHeight / 2;
+
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+
+    renderer.setSize( window.innerWidth, window.innerHeight );
+
+  }
+
+  function onKeyDown(event){
+    // console.log(event)
+    if( event.keyCode == 32 ){PAUSE = false;}
+    // renderer.setAnimationLoop(null);
+  }
+
+  function onKeyUp(event){
+    // console.log('play')
+    if( event.keyCode == 32 ){PAUSE = true;}
+  }
+
+  function animate() {
+
+    requestAnimationFrame( animate );
+    // data = analyser.getFrequencyData();
+    // console.log(data)
+    if(!PAUSE)
+      render();
+
+    stats.update();
+
+  }
+
+  function render() {
+
+    const now = performance.now();
+    let delta = ( now - last ) / 1000;
+
+    if ( delta > 1 ) delta = 1; // safety cap on large deltas
+    last = now;
+
+    positionUniforms[ "time" ].value = now;
+    positionUniforms[ "delta" ].value = delta;
+    velocityUniforms[ "time" ].value = now;
+    velocityUniforms[ "delta" ].value = delta;
+    birdUniforms[ "time" ].value = now;
+    birdUniforms[ "delta" ].value = delta;
+
+
+    gpuCompute.compute();
+
+    birdUniforms[ "texturePosition" ].value = gpuCompute.getCurrentRenderTarget( positionVariable ).texture;
+    birdUniforms[ "textureVelocity" ].value = gpuCompute.getCurrentRenderTarget( velocityVariable ).texture;
+
+    console.log(birdUniforms.texturePosition.value);
+    console.log(birdUniforms.textureVelocity.value);
+
+    renderer.render( scene, camera );
+
+  }
+
+</script>
+</body>
+</html>

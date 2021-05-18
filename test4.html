@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>three.js webgl2 - volume - cloud</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<link type="text/css" rel="stylesheet" href="./css/main.css">
+</head>
+
+<body>
+	<script type="module">
+	import * as THREE from './js/three.module.js';
+	import { OrbitControls } from './js/OrbitControls.js';
+
+	let renderer, scene, camera;
+	let mesh, sm;
+	var start = Date.now()
+	let material;
+	init();
+	animate();
+
+	function init() {
+
+		renderer = new THREE.WebGLRenderer();
+		renderer.setPixelRatio( window.devicePixelRatio );
+		renderer.setSize( window.innerWidth, window.innerHeight );
+		document.body.appendChild( renderer.domElement );
+
+		scene = new THREE.Scene();
+
+		camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 1, 10000 );
+
+		new OrbitControls( camera, renderer.domElement );
+
+
+
+		window.addEventListener( 'resize', onWindowResize );
+	}
+
+	function onWindowResize() {
+		camera.aspect = window.innerWidth / window.innerHeight;
+		camera.updateProjectionMatrix();
+
+		renderer.setSize( window.innerWidth, window.innerHeight );
+
+	}
+	function animate() {
+
+		renderer.render( scene, camera );
+		requestAnimationFrame( animate );
+
+	}
+
+	</script>
+  <script type="text/javascript" src="js/partykals.js"></script>
+
+</body>
+</html>
